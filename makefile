@@ -1,42 +1,74 @@
-# === Toolchain Setup ===
-RISCV_PREFIX   = riscv64-elf-
-CC             = $(RISCV_PREFIX)gcc
-OPENOCD        = openocd
+###############################################################################
+# 1. Toolchain Setup
+###############################################################################
+RISCV_PREFIX = riscv64-elf-
+CC           = $(RISCV_PREFIX)gcc
+OPENOCD      = openocd
 
-# === Project Structure ===
-SRC_DIR   = src
-BUILD_DIR = build
-LINKER    = linker/metal.default.lds
-OPENOCD_CFG = target/sifive-hifive1-revb.cfg
+###############################################################################
+# 2. Directories and Files
+###############################################################################
+SRC_DIR      = src
+BUILD_DIR    = build
+LINKER       = linker/metal.lds
+OPENOCD_CFG  = target/sifive-hifive1-revb.cfg
+INC_DIR      = include
 
-# === Files ===
-SRCS      = $(wildcard $(SRC_DIR)/*.c)
-ELF       = $(BUILD_DIR)/blink.elf
+# Gather C and Assembly source files
+SRC_C  = $(wildcard $(SRC_DIR)/*.c)
+SRC_S  = $(wildcard $(SRC_DIR)/*.s)
+SRCS   = $(SRC_C) $(SRC_S)
 
-# === Compilation Flags ===
-CFLAGS  = -march=rv32imac -mabi=ilp32 -T$(LINKER) -nostartfiles -specs=nosys.specs
+# Convert each .c / .S to .o in build/ folder
+OBJS   = $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SRC_C)) \
+         $(patsubst $(SRC_DIR)/%.s, $(BUILD_DIR)/%.o, $(SRC_S))
 
-# === Targets ===
-all: $(BUILD_DIR) $(ELF)
+# Final ELF output
+ELF    = $(BUILD_DIR)/firmware.elf
 
-# Ensure build directory exists
+###############################################################################
+# 3. Compiler/Linker Flags
+###############################################################################
+CFLAGS  = -march=rv32imac -mabi=ilp32 \
+          -I$(INC_DIR) \
+          -Wall -Wextra -O2 \
+          -ffreestanding -nostartfiles -specs=nosys.specs
+LDFLAGS = -T$(LINKER) -Wl,--gc-sections
+
+###############################################################################
+# 4. Build Rules
+###############################################################################
+all: $(ELF)
+
+# Ensure the build directory exists
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-# Compile and link in one step (EXACTLY like the working manual command)
-$(ELF): $(SRCS) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $(ELF) $(SRCS)
+# (a) Compile .c -> .o
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-# === Flash the Program ===
+# (b) Compile .S -> .o
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.s | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# (c) Link all object files into the final ELF
+$(ELF): $(OBJS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS)
+
+###############################################################################
+# 5. Flash and Debug
+###############################################################################
 flash: $(ELF)
 	$(OPENOCD) -f $(OPENOCD_CFG) -c "program $(ELF) verify reset exit"
 
-# === Debugging with GDB ===
 debug: $(ELF)
 	$(OPENOCD) -f $(OPENOCD_CFG) &
-	sleep 1  # Allow OpenOCD to start
-	riscv64-unknown-elf-gdb $(ELF) -ex "target remote localhost:3333" -ex "monitor reset halt"
+	sleep 1
+	$(RISCV_PREFIX)gdb $(ELF) -ex "target remote localhost:3333" -ex "monitor reset halt"
 
-# === Clean Build Files ===
+###############################################################################
+# 6. Clean
+###############################################################################
 clean:
 	rm -rf $(BUILD_DIR)
